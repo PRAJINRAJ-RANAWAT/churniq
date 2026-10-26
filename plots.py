@@ -144,9 +144,9 @@ def elbow_plot(ks, inertia, sil):
     return fig
 
 
-def pca_scatter(coords, labels, ratio):
+def pca_scatter(coords, labels, ratio, colors=None):
     fig, ax = plt.subplots(figsize=(6.5, 4.8))
-    pal = sns.color_palette("Set2", int(labels.max()) + 1)
+    pal = colors or sns.color_palette("Set2", int(labels.max()) + 1)
     for k in np.unique(labels):
         m = labels == k
         ax.scatter(coords[m, 0], coords[m, 1], s=8, alpha=.5, color=pal[k], label=f"Cluster {k}")
