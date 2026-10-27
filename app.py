@@ -169,17 +169,26 @@ with tab_eda:
     st.dataframe(X_raw.head(8), hide_index=True)
     a, b = st.columns(2)
     a.pyplot(plots.class_distribution(y_raw))
+    a.caption("How many customers stayed vs churned. The classes are imbalanced, so plain accuracy is misleading - we also track precision, recall and F1.")
     b.pyplot(plots.churn_by_contract(X_raw, y_raw))
+    b.caption("Churn rate for each contract type. Month-to-month customers leave far more often than 1- or 2-year contracts.")
     st.pyplot(plots.numeric_distributions(X_raw, y_raw))
+    st.caption("Distribution of tenure, monthly charges and total charges, split by stayed/churned. Where the two shapes differ, the feature carries signal.")
     a, b, c3 = st.columns(3)
     a.pyplot(plots.churn_rate_binned(X_raw, y_raw, "tenure"))
+    a.caption("Churn rate by tenure bucket: risk is highest in the first months and falls as customers stay longer.")
     b.pyplot(plots.churn_rate_binned(X_raw, y_raw, "MonthlyCharges"))
+    b.caption("Churn rate by monthly bill bucket: higher bills tend to mean higher churn.")
     c3.pyplot(plots.correlation_heatmap(X_raw, y_raw, NUMERIC))
+    c3.caption("Pairwise correlation (-1 to +1). Strong pairs (e.g. tenure and total charges) carry overlapping information.")
     a, b = st.columns([1, 2])
     a.pyplot(plots.missing_summary(X_raw))
+    a.caption("Columns with missing values. These are filled (median/mode) during preprocessing.")
     b.markdown("**Categorical feature counts**")
     st.pyplot(plots.categorical_distributions(X_raw))
+    st.caption("How many customers fall in each category of every text feature - shows rare categories and class balance.")
     st.pyplot(plots.churn_rate_by_category(X_raw, y_raw))
+    st.caption("Churn rate inside each category. Bars far above the overall churn rate mark high-risk groups.")
     st.caption("Churn is concentrated in new customers on month-to-month contracts with high monthly bills.")
 
 # ============================================================ tab 2: features
@@ -193,6 +202,8 @@ with tab_fe:
                     "`ChargePerService` = MonthlyCharges ÷ (NumServices+1)")
         st.dataframe(d["X"][["tenure", "MonthlyCharges", "TotalCharges"] + ENGINEERED].head(8), hide_index=True)
         st.pyplot(plots.correlation_heatmap(d["X"], y_raw, ["tenure", "MonthlyCharges", "TotalCharges"] + ENGINEERED))
+        st.caption("Correlation of the new features with the originals and with churn. A new feature is useful if it relates to churn "
+                   "without being a pure copy of an existing column.")
     st.markdown("**Encoded matrix (first rows, first 10 columns):**")
     st.dataframe(pd.DataFrame(d["X_tr"][:6, :10], columns=d["prep"].feature_names[:10]).round(2), hide_index=True)
 
@@ -208,32 +219,54 @@ with tab_model:
     st.caption(f"Test-set results (threshold {thr:.2f} chosen on validation). Validation AUC = {M.roc_auc_score(d['y_va'], p_val):.3f}.")
     a, b, c3 = st.columns(3)
     a.pyplot(plots.confusion_matrix_plot(M.confusion_matrix(yt, p_test >= thr), "Confusion matrix (test)"))
+    a.caption("Counts of right and wrong predictions on the test set: true stays/churners (correct) vs false alarms and missed churners. "
+              "Moving the threshold shifts customers between these boxes.")
     b.pyplot(plots.roc_plot(yt, {MODEL_NAMES[name]: p_test}))
+    b.caption("ROC curve: catch rate (recall) vs false-alarm rate across every possible threshold. Closer to the top-left is better; "
+              "the diagonal is random guessing. AUC summarises it in one number.")
     c3.pyplot(plots.threshold_plot(M.threshold_sweep(d["y_va"], p_val), thr))
+    c3.caption("How precision, recall and F1 change as the threshold moves (validation data). The marker is the threshold currently used: "
+               "a lower threshold catches more churners but raises false alarms.")
 
     names = d["prep"].feature_names
     st.markdown("##### What drives the model")
     if name == "logistic_regression":
         a, b = st.columns(2)
         a.pyplot(plots.loss_curve(model))
+        a.caption("Training loss per iteration of gradient descent. It should fall and flatten; if it is still dropping, add iterations "
+                  "or raise the learning rate; if it zig-zags, lower the learning rate.")
         b.pyplot(plots.importance_plot(names, model.w, "Coefficients (red raises churn risk)"))
+        b.caption("Learned weight per input (inputs are standardised, so sizes are comparable). Red pushes churn risk up, the other colour pushes it down.")
     elif name == "decision_tree":
         st.caption(f"Tree depth {max(model.depth_of)}, {sum(f < 0 for f in model.feature)} leaves.")
         st.pyplot(plots.importance_plot(names, model.feature_importances_, "Gini importance"))
+        st.caption("Gini importance: how much each feature reduced impurity across the tree's splits. Bigger bar = used for more of the decision. "
+                   "It is never negative and does not show direction.")
     else:
         with st.spinner("Permutation importance..."):
             imp = permutation_importance(model, d["X_va"], d["y_va"], d["prep"])
         st.pyplot(plots.importance_plot(list(imp), np.array(list(imp.values())), "AUC drop when feature is shuffled"))
+        st.caption("Each feature is randomly shuffled and we measure how much AUC drops. A big drop means the model relies on that feature; "
+                   "near zero means it barely matters. This model has no built-in weights, so this is how we explain it.")
 
     a, b = st.columns(2)
     a.pyplot(plots.risk_band_plot(yt, p_test))
+    a.caption("Actual churn rate of test customers grouped by predicted risk band.")
     b.caption("Bands: Low < 0.25, Medium < 0.50, High ≥ 0.50. A useful model shows churn rising from Low to High.")
 
     st.markdown("##### Over/under-fitting: one hyper-parameter changing (others as in sidebar)")
     with st.spinner("Running sweep..."):
         key, values, tr_auc, va_auc, tr_err, va_err, leaves = sweep(name, tuple(params.items()), use_fe, seed)
     st.pyplot(plots.sweep_curves(values, tr_auc, va_auc, tr_err, va_err, key, leaves or None))
-    st.caption("Train ≫ validation = overfitting. Both poor = underfitting. Choose the setting where validation AUC peaks.")
+    sweep_note = {
+        "logistic_regression": "L2 strength λ: 0 = no penalty (can overfit); very large λ shrinks weights to zero (underfits).",
+        "knn": "k: small k memorises noise (train AUC near 1, validation low = overfit); very large k averages too many neighbours (underfits).",
+        "decision_tree": "Max depth: deeper trees fit training data almost perfectly but validation drops (overfit); depth 1-2 is too simple (underfit). "
+                         "The leaves line shows tree size.",
+        "gaussian_nb": "Variance smoothing: adds a floor to each feature's variance. Too small = over-confident on rare values; too large = all features look alike.",
+    }[name]
+    st.caption(f"Left: AUC on train vs validation. Right: error rate. {sweep_note} "
+               "Train ≫ validation = overfitting. Both poor = underfitting. Choose the setting where validation AUC peaks.")
 
     st.markdown("##### All four models side by side (default parameters, same split)")
     with st.spinner("Training all four models..."):
@@ -241,11 +274,17 @@ with tab_model:
     a, b = st.columns(2)
     a.dataframe(table.drop(columns="cm").round(3), hide_index=True)
     b.pyplot(plots.roc_plot(yt, probas))
+    b.caption("ROC curves of all four models on the same test set. The curve nearest the top-left corner ranks churners best.")
     st.pyplot(plots.comparison_plot(table.to_dict("records")))
+    st.caption("Accuracy, precision, recall and F1 for each model, each at its own best-F1 threshold. "
+               "Pick by what matters: recall to catch churners, precision to avoid wasted offers.")
     cols = st.columns(4)
     for col, r in zip(cols, table.to_dict("records")):
         col.pyplot(plots.confusion_matrix_plot(r["cm"], r["model"]))
+        col.caption("Test-set confusion matrix.")
     st.pyplot(plots.generalization_plot(table.to_dict("records")))
+    st.caption("Train vs validation vs test AUC per model. A big gap between train and the others means the model memorised the training data; "
+               "similar bars mean it generalises.")
 
 # ============================================================ tab 4: predict
 with tab_pred:
@@ -309,6 +348,12 @@ with tab_seg:
     st.metric("Silhouette (sampled)", f"{sil:.3f}")
     a, b = st.columns(2)
     a.pyplot(plots.pca_scatter(coords, km.labels_, ratio))
+    a.caption("All customers squashed to 2 dimensions with PCA and coloured by cluster. Well-separated colours = distinct segments; "
+              "the axis labels show how much of the data's variation each axis keeps.")
     b.dataframe(prof.round(2).rename_axis("cluster"))
+    b.caption("Average tenure, charges and churn rate per cluster. Silhouette runs from -1 to 1; higher means tighter, better separated clusters.")
     st.pyplot(plots.cluster_profile_plot(prof))
+    st.caption("The same cluster averages as bars, so you can name each segment (e.g. 'new, high-bill, high-churn').")
     st.pyplot(plots.elbow_plot(*elbow(use_fe, seed)))
+    st.caption("Helps choose k. Inertia (spread inside clusters) always falls as k grows - look for the 'elbow' where gains flatten. "
+               "Silhouette should peak at a good k.")
